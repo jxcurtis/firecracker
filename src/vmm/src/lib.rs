@@ -324,6 +324,9 @@ pub struct Vmm {
     vcpus_handles: Vec<VcpuHandle>,
     // Used by Vcpus and devices to initiate teardown; Vmm should never write here.
     vcpus_exit_evt: EventFd,
+    // Used to configure kvm vcpus during hotplugging.
+    #[cfg(target_arch = "x86_64")]
+    vcpu_config: Option<VcpuConfig>,
     // seccomp_filters are only needed in VMM for hotplugging vCPUS.
     #[cfg(target_arch = "x86_64")]
     seccomp_filters: BpfThreadMap,
@@ -416,15 +419,25 @@ impl Vmm {
     pub fn resume_vm(&mut self) -> Result<(), VmmError> {
         self.mmio_device_manager.kick_devices();
 
-        // Send the events.
-        self.vcpus_handles
+        self.resume_vcpu_threads(0)?;
+
+        self.instance_info.state = VmState::Running;
+        Ok(())
+    }
+
+    /// Resume vCPU threads
+    fn resume_vcpu_threads(&mut self, start_idx: usize) -> Result<(), VmmError> {
+        if start_idx >= self.vcpus_handles.len() {
+            return Err(VmmError::VcpuMessage);
+        }
+
+        self.vcpus_handles[start_idx..]
             .iter()
             .try_for_each(|handle| handle.send_event(VcpuEvent::Resume))
             .map_err(|_| VmmError::VcpuMessage)?;
 
         // Check the responses.
-        if self
-            .vcpus_handles
+        if self.vcpus_handles[start_idx..]
             .iter()
             .map(|handle| handle.response_receiver().recv_timeout(RECV_TIMEOUT_SEC))
             .any(|response| !matches!(response, Ok(VcpuResponse::Resumed)))
@@ -432,7 +445,6 @@ impl Vmm {
             return Err(VmmError::VcpuMessage);
         }
 
-        self.instance_info.state = VmState::Running;
         Ok(())
     }
 
@@ -622,6 +634,9 @@ impl Vmm {
             return Err(HotplugVcpuError::VcpuCountTooHigh);
         }
 
+        if let Some(kvm_config) = self.vcpu_config.as_mut() {
+            kvm_config.vcpu_count += config.add;
+        }
         // Create and start new vcpus
         let mut vcpus = Vec::with_capacity(config.add.into());
 
@@ -636,8 +651,13 @@ impl Vmm {
                     .vcpus_exit_evt
                     .try_clone()
                     .map_err(HotplugVcpuError::EventFd)?;
-                let vcpu =
+                let mut vcpu =
                     Vcpu::new(cpu_idx, &self.vm, exit_evt).map_err(HotplugVcpuError::VcpuCreate)?;
+                if let Some(kvm_config) = self.vcpu_config.as_ref() {
+                    vcpu.kvm_vcpu.hotplug_configure(kvm_config)?;
+                } else {
+                    return Err(HotplugVcpuError::RestoredFromSnapshot);
+                }
                 locked_container.cpu_devices[cpu_idx as usize].inserting = true;
                 vcpus.push(vcpu);
             }
@@ -665,6 +685,8 @@ impl Vmm {
             track_dirty_pages: None,
             huge_pages: None,
         };
+
+        self.resume_vcpu_threads(start_idx.into())?;
 
         self.acpi_device_manager.notify_cpu_container()?;
 
@@ -876,6 +898,13 @@ impl Vmm {
         } else {
             Err(BalloonError::DeviceNotFound)
         }
+    }
+
+    /// Add the vcpu configuration used during boot to the VMM. This is required as part of the
+    /// hotplugging process, to correctly configure KVM vCPUs.
+    #[cfg(target_arch = "x86_64")]
+    pub fn attach_vcpu_config(&mut self, vcpu_config: VcpuConfig) {
+        self.vcpu_config = Some(vcpu_config)
     }
 
     /// Signals Vmm to stop and exit.
