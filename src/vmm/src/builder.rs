@@ -52,7 +52,7 @@ use crate::devices::acpi::vmgenid::{VmGenId, VmGenIdError};
 use crate::devices::legacy::serial::SerialOut;
 #[cfg(target_arch = "aarch64")]
 use crate::devices::legacy::RTCDevice;
-use crate::devices::legacy::{EventFdTrigger, SerialEventsWrapper, SerialWrapper};
+use crate::devices::legacy::{EventFdTrigger, SerialDevice, SerialEventsWrapper, SerialWrapper};
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::device::VirtioDevice;
@@ -60,6 +60,7 @@ use crate::devices::virtio::mmio::MmioTransport;
 use crate::devices::virtio::net::Net;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
+#[cfg(target_arch = "x86_64")]
 use crate::devices::BusDevice;
 use crate::logger::{debug, error};
 use crate::persist::{MicrovmState, MicrovmStateError};
@@ -697,11 +698,11 @@ pub fn setup_serial_device(
     event_manager: &mut EventManager,
     input: std::io::Stdin,
     out: std::io::Stdout,
-) -> Result<Arc<Mutex<BusDevice>>, VmmError> {
+) -> Result<Arc<Mutex<SerialDevice<std::io::Stdin>>>, VmmError> {
     let interrupt_evt = EventFdTrigger::new(EventFd::new(EFD_NONBLOCK).map_err(VmmError::EventFd)?);
     let kick_stdin_read_evt =
         EventFdTrigger::new(EventFd::new(EFD_NONBLOCK).map_err(VmmError::EventFd)?);
-    let serial = Arc::new(Mutex::new(BusDevice::Serial(SerialWrapper {
+    let serial = Arc::new(Mutex::new(SerialWrapper {
         serial: Serial::with_events(
             interrupt_evt,
             SerialEventsWrapper {
@@ -710,7 +711,7 @@ pub fn setup_serial_device(
             SerialOut::Stdout(out),
         ),
         input: Some(input),
-    })));
+    }));
     event_manager.add_subscriber(serial.clone());
     Ok(serial)
 }
@@ -1130,7 +1131,7 @@ pub mod tests {
         let acpi_device_manager = ACPIDeviceManager::new();
         #[cfg(target_arch = "x86_64")]
         let pio_device_manager = PortIODeviceManager::new(
-            Arc::new(Mutex::new(BusDevice::Serial(SerialWrapper {
+            Arc::new(Mutex::new(SerialWrapper {
                 serial: Serial::with_events(
                     EventFdTrigger::new(EventFd::new(EFD_NONBLOCK).unwrap()),
                     SerialEventsWrapper {
@@ -1139,7 +1140,7 @@ pub mod tests {
                     SerialOut::Sink(std::io::sink()),
                 ),
                 input: None,
-            }))),
+            })),
             EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         )
         .unwrap();
