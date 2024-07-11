@@ -38,7 +38,6 @@ use crate::cpu_config::templates::{
     CpuConfiguration, CustomCpuTemplate, GetCpuTemplate, GetCpuTemplateError, GuestConfigError,
     KvmCapability,
 };
-use crate::cpu_config::x86_64::cpuid::{self, Cpuid};
 #[cfg(target_arch = "x86_64")]
 use crate::device_manager::acpi::ACPIDeviceManager;
 #[cfg(target_arch = "x86_64")]
@@ -457,6 +456,8 @@ pub enum BuildMicrovmFromSnapshotError {
     StartVcpus(#[from] crate::StartVcpusError),
     /// Failed to restore vCPUs: {0}
     RestoreVcpus(#[from] VcpuError),
+    /// Failed to restore CPUID: {0}
+    RestoreCpuId(#[from] GuestConfigError),
     /// Failed to apply VMM secccomp filter as none found.
     MissingVmmSeccompFilters,
     /// Failed to apply VMM secccomp filter: {0}
@@ -528,6 +529,31 @@ pub fn build_microvm_from_snapshot(
     #[cfg(target_arch = "x86_64")]
     vmm.vm.restore_state(&microvm_state.vm_state)?;
 
+    #[cfg(target_arch = "x86_64")]
+    {
+        // FIXME: Custom templates are not stored when snapshots are taken, as they were previously
+        // only needed at boottime. With hotplugging, the template could be necessary at any time,
+        // so snapshot must be modified in order to save custom templates
+
+        // let cpuid = Cpuid::try_from(vmm.vm.supported_cpuid().clone())
+        //     .map_err(GuestConfigError::CpuidFromKvmCpuid)?;
+
+        // let_cpu_template = &microvm_state.vm_info.cpu_template;
+        //
+        // let msrs = vcpus[0]
+        //     .kvm_vcpu
+        //     .get_msrs(&[])
+        //     .map_err(GuestConfigError::VcpuIoctl)?;
+        //
+        // let cpu_config = CpuConfiguration { cpuid, msrs };
+        //
+        // let vcpu_config = VcpuConfig {
+        //     vcpu_count: vcpus.len().try_into().unwrap(),
+        //     smt: microvm_state.vm_info.smt,
+        //     cpu_config,
+        // };
+    }
+
     // Restore the boot source config paths.
     vm_resources.set_boot_source_config(microvm_state.vm_info.boot_source);
 
@@ -546,6 +572,7 @@ pub fn build_microvm_from_snapshot(
             .map_err(MicrovmStateError::RestoreDevices)?;
     vmm.emulate_serial_init()?;
 
+    #[cfg(target_arch = "x86_64")]
     {
         if let Some(BusDevice::CpuContainer(container)) =
             vmm.get_bus_device(DeviceType::CpuContainer, "CpuContainer")
