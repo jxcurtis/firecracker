@@ -43,8 +43,10 @@ impl ACPIDeviceManager {
         cpu_container: Arc<Mutex<CpuContainer>>,
         vm_fd: &VmFd,
     ) -> Result<(), kvm_ioctls::Error> {
-        let locked_container = cpu_container.lock().expect("Poisoned lock");
-        vm_fd.register_irqfd(&locked_container.acpi_interrupt_evt, locked_container.gsi)?;
+        {
+            let locked_container = cpu_container.lock().expect("Poisoned lock");
+            vm_fd.register_irqfd(&locked_container.acpi_interrupt_evt, locked_container.gsi)?;
+        }
         self.cpu_container = Some(cpu_container);
         Ok(())
     }

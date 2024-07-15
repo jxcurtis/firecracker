@@ -68,6 +68,8 @@ pub enum BusDevice {
     BootTimer(Arc<Mutex<BootTimer>>),
     MmioTransport(Arc<Mutex<MmioTransport>>),
     Serial(Arc<Mutex<SerialDevice<std::io::Stdin>>>),
+    #[cfg(target_arch = "x86_64")]
+    CpuContainer(Arc<Mutex<CpuContainer>>),
     #[cfg(test)]
     Dummy(Arc<Mutex<DummyDevice>>),
     #[cfg(test)]
@@ -132,6 +134,8 @@ impl BusDevice {
             Self::BootTimer(x) => x.lock().expect("Poisoned lock").bus_read(offset, data),
             Self::MmioTransport(x) => x.lock().expect("Poisoned lock").bus_read(offset, data),
             Self::Serial(x) => x.lock().expect("Poisoned lock").bus_read(offset, data),
+            #[cfg(target_arch = "x86_64")]
+            Self::CpuContainer(x) => x.lock().expect("Poisoned lock").bus_read(offset, data),
             #[cfg(test)]
             Self::Dummy(x) => x.lock().expect("Poisoned lock").bus_read(offset, data),
             #[cfg(test)]
@@ -147,6 +151,8 @@ impl BusDevice {
             Self::BootTimer(x) => x.lock().expect("Poisoned lock").bus_write(offset, data),
             Self::MmioTransport(x) => x.lock().expect("Poisoned lock").bus_write(offset, data),
             Self::Serial(x) => x.lock().expect("Poisoned lock").bus_write(offset, data),
+            #[cfg(target_arch = "x86_64")]
+            Self::CpuContainer(x) => x.lock().expect("Poisoned lock").bus_write(offset, data),
             #[cfg(test)]
             Self::Dummy(x) => x.lock().expect("Poisoned lock").bus_write(offset, data),
             #[cfg(test)]

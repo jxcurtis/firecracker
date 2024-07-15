@@ -38,6 +38,7 @@ use crate::cpu_config::templates::{
     CpuConfiguration, CustomCpuTemplate, GetCpuTemplate, GetCpuTemplateError, GuestConfigError,
     KvmCapability,
 };
+use crate::cpu_config::x86_64::cpuid::{self, Cpuid};
 #[cfg(target_arch = "x86_64")]
 use crate::device_manager::acpi::ACPIDeviceManager;
 #[cfg(target_arch = "x86_64")]
@@ -86,6 +87,9 @@ pub enum StartMicrovmError {
     /// Unable to attach the VMGenID device: {0}
     #[cfg(target_arch = "x86_64")]
     AttachVmgenidDevice(kvm_ioctls::Error),
+    /// Unable to attach the CpuContainer device: {0}
+    #[cfg(target_arch = "x86_64")]
+    AttachCpuContainerDevice(kvm_ioctls::Error),
     /// System configuration error: {0}
     ConfigureSystem(crate::arch::ConfigurationError),
     /// Failed to create guest config: {0}
@@ -179,10 +183,10 @@ fn create_vmm_and_vcpus(
         .map_err(VmmError::EventFd)
         .map_err(Internal)?;
 
-    let mut resource_allocator = ResourceAllocator::new()?;
+    let resource_allocator = ResourceAllocator::new()?;
 
     // Instantiate the MMIO device manager.
-    let mut mmio_device_manager = MMIODeviceManager::new();
+    let mmio_device_manager = MMIODeviceManager::new();
 
     // Instantiate ACPI device manager.
     #[cfg(target_arch = "x86_64")]
@@ -553,14 +557,20 @@ pub fn build_microvm_from_snapshot(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let acpi_ctor_args = ACPIDeviceManagerConstructorArgs {
-            mem: &guest_memory,
-            resource_allocator: &mut vmm.resource_allocator,
-            vm: vmm.vm.fd(),
-        };
+        if let Some(BusDevice::CpuContainer(container)) =
+            vmm.get_bus_device(DeviceType::CpuContainer, "CpuContainer")
+        {
+            let container_ref = container.clone();
+            let acpi_ctor_args = ACPIDeviceManagerConstructorArgs {
+                mem: &guest_memory,
+                resource_allocator: &mut vmm.resource_allocator,
+                vm: vmm.vm.fd(),
+                cpu_container: container_ref,
+            };
 
-        vmm.acpi_device_manager =
-            ACPIDeviceManager::restore(acpi_ctor_args, &microvm_state.acpi_dev_state)?;
+            vmm.acpi_device_manager =
+                ACPIDeviceManager::restore(acpi_ctor_args, &microvm_state.acpi_dev_state)?;
+        }
 
         // Inject the notification to VMGenID that we have resumed from a snapshot.
         // This needs to happen before we resume vCPUs, so that we minimize the time between vCPUs
@@ -1034,13 +1044,23 @@ fn attach_balloon_device(
     attach_virtio_device(event_manager, vmm, id, balloon.clone(), cmdline, false)
 }
 
+#[cfg(target_arch = "x86_64")]
 fn attach_cpu_container_device(vmm: &mut Vmm, vcpu_count: u8) -> Result<(), StartMicrovmError> {
     let cpu_container = Arc::new(Mutex::new(CpuContainer::new(
         &mut vmm.resource_allocator,
         vcpu_count,
     )?));
     vmm.acpi_device_manager
-        .attach_cpu_container(cpu_container.clone(), vmm.vm.fd());
+        .attach_cpu_container(cpu_container.clone(), vmm.vm.fd())
+        .map_err(StartMicrovmError::AttachCpuContainerDevice)?;
+    vmm.mmio_device_manager
+        .register_mmio_cpu_container_for_boot(
+            vmm.vm.fd(),
+            &mut vmm.resource_allocator,
+            cpu_container,
+        )
+        .map_err(StartMicrovmError::RegisterMmioDevice)?;
+
     Ok(())
 }
 
@@ -1154,10 +1174,13 @@ pub mod tests {
         #[cfg(target_arch = "aarch64")]
         let resource_allocator = ResourceAllocator::new().unwrap();
 
+        #[cfg(target_arch = "x86_64")]
+        let mut mmio_device_manager = MMIODeviceManager::new();
+        #[cfg(target_arch = "aarch64")]
         let mmio_device_manager = MMIODeviceManager::new();
 
         #[cfg(target_arch = "x86_64")]
-        let acpi_device_manager = ACPIDeviceManager::new();
+        let mut acpi_device_manager = ACPIDeviceManager::new();
 
         #[cfg(target_arch = "x86_64")]
         let pio_device_manager = PortIODeviceManager::new(
@@ -1176,14 +1199,21 @@ pub mod tests {
         .unwrap();
 
         #[cfg(target_arch = "x86_64")]
-        setup_interrupt_controller(&mut vm).unwrap();
-
-        #[cfg(target_arch = "x86_64")]
         {
+            setup_interrupt_controller(&mut vm).unwrap();
             let cpu_container = Arc::new(Mutex::new(
                 CpuContainer::new(&mut resource_allocator, 1).unwrap(),
             ));
-            acpi_device_manager.attach_cpu_container(cpu_container.clone, vm.fd())
+            acpi_device_manager
+                .attach_cpu_container(cpu_container.clone(), vm.fd())
+                .unwrap();
+            mmio_device_manager
+                .register_mmio_cpu_container_for_boot(
+                    vm.fd(),
+                    &mut resource_allocator,
+                    cpu_container,
+                )
+                .unwrap();
         }
 
         #[cfg(target_arch = "aarch64")]
