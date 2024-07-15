@@ -5,6 +5,7 @@
 
 use acpi_tables::madt::LocalAPIC;
 use acpi_tables::{aml, Aml};
+use kvm_ioctls::VmFd;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use utils::eventfd::EventFd;
@@ -12,6 +13,7 @@ use vm_memory::{GuestAddress, GuestMemoryError};
 use vm_superio::Trigger;
 use zerocopy::AsBytes;
 
+use crate::device_manager::mmio::MMIO_LEN;
 use crate::device_manager::resources::ResourceAllocator;
 use crate::devices::legacy::EventFdTrigger;
 use crate::vmm_config::machine_config::MAX_SUPPORTED_VCPUS;
@@ -41,6 +43,8 @@ pub enum CpuContainerError {
     GuestMemory(#[from] GuestMemoryError),
     /// Failed to allocate requested resource: {0}
     Allocator(#[from] vm_allocator::Error),
+    /// Failed to register file descriptor: {0}
+    RegisterIrqFd(#[from] kvm_ioctls::Error),
 }
 
 pub const CPU_CONTAINER_ACPI_SIZE: usize = 0xC;
@@ -78,10 +82,10 @@ impl CpuContainer {
         boot_count: u8,
     ) -> Result<Self, CpuContainerError> {
         let gsi = resource_allocator.allocate_gsi(1)?;
-        let mmio_address = resource_allocator.allocate_system_memory(
-            4096,
-            8,
-            vm_allocator::AllocPolicy::LastMatch,
+        let mmio_address = resource_allocator.allocate_mmio_memory(
+            MMIO_LEN,
+            MMIO_LEN,
+            vm_allocator::AllocPolicy::FirstMatch,
         )?;
 
         let mut cpu_devices = Vec::new();
@@ -102,6 +106,49 @@ impl CpuContainer {
             .inspect_err(|err| error!("hotplug: could not send guest notification: {err}"))?;
         debug!("hotplug: notifying guest about new vcpus available");
         Ok(())
+    }
+
+    pub fn bus_read(&mut self, offset: u64, data: &mut [u8]) {
+        data.fill(0);
+        match offset {
+            CPU_SELECTION_OFFSET => {
+                data[0] = self.selected_cpu;
+            }
+            CPU_STATUS_OFFSET => {
+                if self.selected_cpu < MAX_SUPPORTED_VCPUS {
+                    let cpu_device = &self.cpu_devices[self.selected_cpu as usize];
+                    if cpu_device.active {
+                        data[0] |= CPU_ENABLE_BIT;
+                    }
+                    if cpu_device.inserting {
+                        data[0] |= CPU_INSERTING_BIT;
+                    }
+                } else {
+                    error!("Out of range vCPU id: {}", self.selected_cpu)
+                }
+            }
+            _ => error!("Unexpected CPU container offset"),
+        }
+    }
+
+    pub fn bus_write(&mut self, offset: u64, data: &[u8]) {
+        match offset {
+            CPU_SELECTION_OFFSET => self.selected_cpu = data[0],
+            CPU_STATUS_OFFSET => {
+                if self.selected_cpu < MAX_SUPPORTED_VCPUS {
+                    let cpu_device = &mut self.cpu_devices[self.selected_cpu as usize];
+                    if data[0] & CPU_INSERTING_BIT != 0 {
+                        cpu_device.inserting = false;
+                    }
+                    if data[0] & CPU_ENABLE_BIT != 0 {
+                        cpu_device.active = true;
+                    }
+                } else {
+                    error!("Out of range vCPU id: {}", self.selected_cpu)
+                }
+            }
+            _ => error!("Unexpected CPU container offset"),
+        }
     }
 }
 
