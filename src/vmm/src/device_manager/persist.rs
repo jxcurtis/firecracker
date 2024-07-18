@@ -17,6 +17,8 @@ use super::mmio::*;
 use super::resources::ResourceAllocator;
 #[cfg(target_arch = "aarch64")]
 use crate::arch::DeviceType;
+#[cfg(target_arch = "x86_64")]
+use crate::devices::acpi::cpu_container::CpuContainer;
 use crate::devices::acpi::vmgenid::{VMGenIDState, VMGenIdConstructorArgs, VmGenId, VmGenIdError};
 use crate::devices::virtio::balloon::persist::{BalloonConstructorArgs, BalloonState};
 use crate::devices::virtio::balloon::{Balloon, BalloonError};
@@ -237,6 +239,8 @@ pub struct ACPIDeviceManagerConstructorArgs<'a> {
     pub mem: &'a GuestMemoryMmap,
     pub resource_allocator: &'a mut ResourceAllocator,
     pub vm: &'a VmFd,
+    #[cfg(target_arch = "x86_64")]
+    pub cpu_container: Arc<Mutex<CpuContainer>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]

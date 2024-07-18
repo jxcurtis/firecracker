@@ -29,6 +29,8 @@ use vm_superio::Serial;
 
 #[cfg(target_arch = "x86_64")]
 use crate::acpi;
+#[cfg(target_arch = "x86_64")]
+use crate::arch::DeviceType;
 use crate::arch::InitrdConfig;
 #[cfg(target_arch = "aarch64")]
 use crate::construct_kvm_mpidrs;
@@ -44,6 +46,8 @@ use crate::device_manager::persist::{
     ACPIDeviceManagerConstructorArgs, ACPIDeviceManagerRestoreError, MMIODevManagerConstructorArgs,
 };
 use crate::device_manager::resources::ResourceAllocator;
+#[cfg(target_arch = "x86_64")]
+use crate::devices::acpi::cpu_container::{CpuContainer, CpuContainerError};
 use crate::devices::acpi::vmgenid::{VmGenId, VmGenIdError};
 use crate::devices::legacy::serial::SerialOut;
 #[cfg(target_arch = "aarch64")]
@@ -90,6 +94,9 @@ pub enum StartMicrovmError {
     CreateLegacyDevice(device_manager::legacy::LegacyDeviceError),
     /// Error creating VMGenID device: {0}
     CreateVMGenID(VmGenIdError),
+    /// Error creating CpuContainer device: {0}
+    #[cfg(target_arch = "x86_64")]
+    CreateCpuContainer(#[from] CpuContainerError),
     /// Invalid Memory Configuration: {0}
     GuestMemory(crate::vstate::memory::MemoryError),
     /// Cannot load initrd due to an invalid memory configuration.
@@ -166,10 +173,10 @@ fn create_vmm_and_vcpus(
         .map_err(VmmError::EventFd)
         .map_err(Internal)?;
 
-    let resource_allocator = ResourceAllocator::new()?;
+    let mut resource_allocator = ResourceAllocator::new()?;
 
     // Instantiate the MMIO device manager.
-    let mmio_device_manager = MMIODeviceManager::new();
+    let mut mmio_device_manager = MMIODeviceManager::new();
 
     // Instantiate ACPI device manager.
     let acpi_device_manager = ACPIDeviceManager::new();
@@ -317,6 +324,9 @@ pub fn build_microvm_for_boot(
     if vm_resources.boot_timer {
         attach_boot_timer_device(&mut vmm, request_ts)?;
     }
+
+    #[cfg(target_arch = "x86_64")]
+    attach_cpu_container_device(&mut vmm, vm_resources.vm_config.vcpu_count)?;
 
     if let Some(balloon) = vm_resources.balloon.get() {
         attach_balloon_device(&mut vmm, &mut boot_cmdline, balloon, event_manager)?;
@@ -1012,6 +1022,16 @@ fn attach_balloon_device(
     attach_virtio_device(event_manager, vmm, id, balloon.clone(), cmdline, false)
 }
 
+fn attach_cpu_container_device(vmm: &mut Vmm, vcpu_count: u8) -> Result<(), StartMicrovmError> {
+    let cpu_container = Arc::new(Mutex::new(CpuContainer::new(
+        &mut vmm.resource_allocator,
+        vcpu_count,
+    )?));
+    vmm.acpi_device_manager
+        .attach_cpu_container(cpu_container.clone(), vmm.vm.fd());
+    Ok(())
+}
+
 // Adds `O_NONBLOCK` to the stdout flags.
 pub(crate) fn set_stdout_nonblocking() {
     // SAFETY: Call is safe since parameters are valid.
@@ -1036,6 +1056,8 @@ pub mod tests {
     use super::*;
     use crate::arch::DeviceType;
     use crate::device_manager::resources::ResourceAllocator;
+    #[cfg(target_arch = "x86_64")]
+    use crate::devices::acpi::cpu_container::CpuContainer;
     use crate::devices::virtio::block::CacheType;
     use crate::devices::virtio::rng::device::ENTROPY_DEV_ID;
     use crate::devices::virtio::vsock::{TYPE_VSOCK, VSOCK_DEV_ID};
@@ -1114,8 +1136,17 @@ pub mod tests {
 
         let mut vm = Vm::new(vec![]).unwrap();
         vm.memory_init(&guest_memory, false).unwrap();
+
+        #[cfg(target_arch = "x86_64")]
+        let mut resource_allocator = ResourceAllocator::new().unwrap();
+        #[cfg(target_arch = "aarch64")]
+        let resource_allocator = ResourceAllocator::new().unwrap();
+
         let mmio_device_manager = MMIODeviceManager::new();
+
+        #[cfg(target_arch = "x86_64")]
         let acpi_device_manager = ACPIDeviceManager::new();
+
         #[cfg(target_arch = "x86_64")]
         let pio_device_manager = PortIODeviceManager::new(
             Arc::new(Mutex::new(SerialWrapper {
@@ -1135,6 +1166,14 @@ pub mod tests {
         #[cfg(target_arch = "x86_64")]
         setup_interrupt_controller(&mut vm).unwrap();
 
+        #[cfg(target_arch = "x86_64")]
+        {
+            let cpu_container = Arc::new(Mutex::new(
+                CpuContainer::new(&mut resource_allocator, 1).unwrap(),
+            ));
+            acpi_device_manager.attach_cpu_container(cpu_container.clone, vm.fd())
+        }
+
         #[cfg(target_arch = "aarch64")]
         {
             let exit_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
@@ -1153,7 +1192,7 @@ pub mod tests {
             vcpus_exit_evt,
             #[cfg(target_arch = "x86_64")]
             seccomp_filters: crate::seccomp_filters::get_empty_filters(),
-            resource_allocator: ResourceAllocator::new().unwrap(),
+            resource_allocator,
             mmio_device_manager,
             #[cfg(target_arch = "x86_64")]
             pio_device_manager,
