@@ -94,7 +94,7 @@ def test_custom_udev_rule_latency(
     "vcpu_count", [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
 )
 def test_manual_latency(
-    microvm_factory, guest_kernel_linux_acpi_only, rootfs_rw, vcpu_count
+    microvm_factory, guest_kernel_linux_acpi_only, rootfs_rw, vcpu_count, results_dir
 ):
     """Test the latency for hotplugging and booting CPUs in the guest"""
     gcc_compile(Path("./host_tools/hotplug_time.c"), Path("host_tools/hotplug_time.o"))
@@ -143,8 +143,9 @@ def test_manual_latency(
 
         data.append({"vcpus": vcpu_count, "api": api_duration, "onlining": timestamp})
 
-    df = pandas.DataFrame.from_dict(data).to_csv(
-        f"../test_results/manual-hotplug_{vcpu_count}.csv",
+    output_file = results_dir / f"hotplug-{vcpu_count}.csv"
+
+    csv_data = pandas.DataFrame.from_dict(data).to_csv(
         index=False,
         float_format="%.3f",
     )
