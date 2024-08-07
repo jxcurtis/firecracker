@@ -68,7 +68,7 @@
 DEVCTR_IMAGE_NO_TAG="public.ecr.aws/firecracker/fcuvm"
 
 # Development container tag
-DEVCTR_IMAGE_TAG=${DEVCTR_IMAGE_TAG:-v71}
+DEVCTR_IMAGE_TAG=${DEVCTR_IMAGE_TAG:-v74}
 
 # Development container image (name:tag)
 # This should be updated whenever we upgrade the development container.
@@ -228,6 +228,7 @@ cmd_fix_perms() {
     # Yes, running Docker to get elevated privileges, just to chown some files
     # is a dirty hack.
     run_devctr \
+        --workdir "$CTR_FC_ROOT_DIR" \
         -- \
         chown -R "$(id -u):$(id -g)" "$CTR_FC_BUILD_DIR"
 }
@@ -305,6 +306,8 @@ run_devctr() {
         --rm \
         --volume /dev:/dev \
         --volume "$FC_ROOT_DIR:$CTR_FC_ROOT_DIR:z" \
+        --volume "$FC_ROOT_DIR/build/cargo_registry:/usr/local/rust/registry:z" \
+        --volume "$FC_ROOT_DIR/build/cargo_git_registry:/usr/local/rust/git:z" \
         --tmpfs /srv:exec,dev,size=32G \
         -v /boot:/boot \
         --env PYTHONDONTWRITEBYTECODE=1 \
@@ -605,7 +608,7 @@ apply_performance_tweaks() {
     # https://www.kernel.org/doc/html/v4.12/admin-guide/pm/intel_pstate.html
     echo 100 |sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct &> /dev/null
     echo 100 |sudo tee /sys/devices/system/cpu/intel_pstate/max_perf_pct &> /dev/null
-  elif [[ -f /sys/devices/system/cpu/cpufreq/boost ]] && [ ! $(uname -r | grep 4.14) ]; then
+  elif [[ -f /sys/devices/system/cpu/cpufreq/boost ]]; then
     echo 0 |sudo tee /sys/devices/system/cpu/cpufreq/boost &> /dev/null
   fi
 
@@ -884,7 +887,9 @@ cmd_test_debug() {
 #
 cmd_fmt() {
     cmd_sh "cargo fmt --all -- --config $(tr '\n' ',' <tests/fmt.toml)"
+    cmd_sh "cargo sort"
     cmd_sh "cd tests; black . ../tools ../.buildkite"
+    cmd_sh "cd tests; isort . ../tools ../.buildkite"
     cmd_sh "mdformat $(git ls-files '*.md' | tr '\n' ' ')"
 }
 

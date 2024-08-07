@@ -259,12 +259,8 @@ impl VirtioDevice for Entropy {
         &self.queue_events
     }
 
-    fn interrupt_evt(&self) -> &EventFd {
-        &self.irq_trigger.irq_evt
-    }
-
-    fn interrupt_status(&self) -> Arc<AtomicU32> {
-        self.irq_trigger.irq_status.clone()
+    fn interrupt_trigger(&self) -> &IrqTrigger {
+        &self.irq_trigger
     }
 
     fn avail_features(&self) -> u64 {
@@ -288,10 +284,9 @@ impl VirtioDevice for Entropy {
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
-        self.activate_event.write(1).map_err(|err| {
-            error!("entropy: Cannot write to activate_evt: {err}");
+        self.activate_event.write(1).map_err(|_| {
             METRICS.activate_fails.inc();
-            super::super::ActivateError::BadActivate
+            ActivateError::EventFd
         })?;
         self.device_state = DeviceState::Activated(mem);
         Ok(())
@@ -405,7 +400,7 @@ mod tests {
         }
 
         for i in 0..10 {
-            entropy_dev.ack_features_by_page(i, std::u32::MAX);
+            entropy_dev.ack_features_by_page(i, u32::MAX);
         }
 
         assert_eq!(entropy_dev.acked_features, features);

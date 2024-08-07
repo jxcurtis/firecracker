@@ -59,8 +59,7 @@ def _test_mmds(vm, mmds_net_iface):
     cmd = "ip route add {} dev {}".format(
         mmds_net_iface.guest_ip, mmds_net_iface.dev_name
     )
-    code, _, _ = vm.ssh.run(cmd)
-    assert code == 0
+    vm.ssh.check_output(cmd)
 
     # The base microVM had MMDS version 2 configured, which was persisted
     # across the snapshot-restore.
@@ -105,6 +104,7 @@ def test_snap_restore_from_artifacts(
     logger.info("Working with snapshot artifacts in %s.", snapshot_dir)
 
     vm = microvm_factory.build()
+    vm.time_api_requests = False
     vm.spawn()
     logger.info("Loading microVM from snapshot...")
     vm.restore_from_path(snapshot_dir)
@@ -116,8 +116,7 @@ def test_snap_restore_from_artifacts(
     # Test that net devices have connectivity after restore.
     for idx, iface in enumerate(vm.iface.values()):
         logger.info("Testing net device %s...", iface["iface"].dev_name)
-        exit_code, _, _ = vm.ssh_iface(idx).run("true")
-        assert exit_code == 0
+        vm.ssh_iface(idx).check_output("true")
 
     logger.info("Testing data store behavior...")
     _test_mmds(vm, vm.iface["eth3"]["iface"])

@@ -20,11 +20,11 @@ DEFAULT_G2_FEATURES = set(
 )
 
 DEFAULT_G3_FEATURES_4_14 = DEFAULT_G2_FEATURES | set(
-    "sha512 asimdfhm dit uscat ilrcpc flagm jscvt fcma sha3 sm3 sm4".split(" ")
+    "sha512 asimdfhm dit uscat ilrcpc flagm jscvt fcma sha3 sm3 sm4 rng".split(" ")
 )
 
 DEFAULT_G3_FEATURES_5_10 = DEFAULT_G3_FEATURES_4_14 | set(
-    "dcpodp i8mm bf16 dgh rng".split(" ")
+    "dcpodp i8mm bf16 dgh".split(" ")
 )
 
 DEFAULT_G3_FEATURES_WITH_SVE_AND_PAC_4_14 = DEFAULT_G3_FEATURES_4_14
@@ -55,8 +55,7 @@ def _check_cpu_features_arm(test_microvm, guest_kv, template_name=None):
         case CpuModel.ARM_NEOVERSE_V1, _, None:
             expected_cpu_features = DEFAULT_G3_FEATURES_5_10
 
-    ret, stdout, stderr = test_microvm.ssh.run(r"lscpu |grep -oP '^Flags:\s+\K.+'")
-    assert ret == 0, stderr
+    _, stdout, _ = test_microvm.ssh.check_output(r"lscpu |grep -oP '^Flags:\s+\K.+'")
     flags = set(stdout.strip().split(" "))
     assert flags == expected_cpu_features
 
